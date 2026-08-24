@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PW Vidyapeeth — Admit Card Lookup</title>
+  <style>
+    :root {
+      --pw-red: #9e1b24;
+      --pw-red-dark: #7a1119;
+      --ink: #1c1614;
+      --paper: #faf6f2;
+      --line: #e7dcd4;
+      --muted: #8a7a72;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    header {
+      width: 100%;
+      background: var(--pw-red);
+      background-image: linear-gradient(160deg, var(--pw-red) 0%, var(--pw-red-dark) 100%);
+      color: #fff;
+      padding: 2.4rem 1.5rem 3.2rem;
+      text-align: center;
+    }
+
+    .brand {
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      font-size: 1.5rem;
+      text-transform: uppercase;
+    }
+
+    .brand span {
+      color: #f3c8ab;
+    }
+
+    header p {
+      margin: 0.5rem 0 0;
+      opacity: 0.85;
+      font-size: 0.95rem;
+    }
+
+    main {
+      width: 100%;
+      max-width: 420px;
+      margin-top: -2rem;
+      padding: 0 1.25rem 3rem;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 12px 30px -12px rgba(30, 12, 12, 0.25);
+      padding: 1.75rem;
+    }
+
+    .card h1 {
+      font-size: 1.1rem;
+      margin: 0 0 0.25rem;
+    }
+
+    .card .sub {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin: 0 0 1.5rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 0.35rem;
+      color: var(--ink);
+    }
+
+    input {
+      width: 100%;
+      padding: 0.7rem 0.8rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 0.95rem;
+      margin-bottom: 1.1rem;
+      background: var(--paper);
+    }
+
+    input:focus {
+      outline: 2px solid var(--pw-red);
+      outline-offset: 1px;
+    }
+
+    button {
+      width: 100%;
+      padding: 0.8rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--pw-red);
+      color: #fff;
+      font-size: 0.95rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--pw-red-dark);
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin-top: 1rem;
+      font-size: 0.88rem;
+      line-height: 1.4;
+    }
+
+    .status.error {
+      color: var(--pw-red-dark);
+    }
+
+    .status.success {
+      color: #1c6b3a;
+    }
+
+    .result {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid #cfe6d8;
+      background: #f2faf5;
+      border-radius: 10px;
+      display: none;
+    }
+
+    .result a {
+      display: inline-block;
+      margin-top: 0.6rem;
+      background: #1c6b3a;
+      color: #fff;
+      text-decoration: none;
+      font-weight: 700;
+      padding: 0.6rem 1rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+    }
+
+    footer {
+      color: var(--muted);
+      font-size: 0.78rem;
+      margin-top: auto;
+      padding: 1.5rem;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <div class="brand">PW <span>VIDYAPEETH</span></div>
+    <p>Admit Card Lookup</p>
+  </header>
+
+  <main>
+    <div class="card">
+      <h1>Find your admit card</h1>
+      <p class="sub">Enter your registration number and mobile number to get your download link.</p>
+
+      <form id="lookup-form">
+        <label for="reg">Registration Number</label>
+        <input id="reg" type="text" inputmode="numeric" placeholder="e.g. 22252987" required />
+
+        <label for="mobile">Mobile Number (last 4 digits)</label>
+        <input id="mobile" type="text" inputmode="numeric" maxlength="4" placeholder="e.g. 4321" required />
+
+        <button id="submit-btn" type="submit">Get my admit card</button>
+      </form>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+
+      <div id="result" class="result">
+        <div id="result-text"></div>
+        <a id="result-link" href="#" target="_blank" rel="noopener">Download Admit Card</a>
+      </div>
+    </div>
+  </main>
+
+  <footer>PW Vidyapeeth · If your details don't match, check with your center coordinator.</footer>
+
+  <script>
+    // Point this at your deployed Apps Script Web App URL (see backend/Code.gs + README).
+    const BACKEND_URL = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+
+    const form = document.getElementById("lookup-form");
+    const statusEl = document.getElementById("status");
+    const resultEl = document.getElementById("result");
+    const resultText = document.getElementById("result-text");
+    const resultLink = document.getElementById("result-link");
+    const submitBtn = document.getElementById("submit-btn");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      resultEl.style.display = "none";
+      statusEl.textContent = "";
+      statusEl.className = "status";
+
+      const reg = document.getElementById("reg").value.trim();
+      const mobile = document.getElementById("mobile").value.trim();
+
+      if (!reg || mobile.length !== 4) {
+        statusEl.textContent = "Enter a valid registration number and the last 4 digits of your mobile number.";
+        statusEl.className = "status error";
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Looking up…";
+      statusEl.textContent = "";
+
+      try {
+        const url = `${BACKEND_URL}?reg=${encodeURIComponent(reg)}&mobile=${encodeURIComponent(mobile)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (data.found) {
+          resultText.textContent = `Admit card ready for ${data.name || "you"}.`;
+          resultLink.href = data.link;
+          resultEl.style.display = "block";
+        } else {
+          statusEl.textContent = data.message || "No admit card found for those details. Double-check and try again.";
+          statusEl.className = "status error";
+        }
+      } catch (err) {
+        statusEl.textContent = "Couldn't reach the lookup service right now. Please try again in a moment.";
+        statusEl.className = "status error";
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Get my admit card";
+      }
+    });
+  </script>
+
+</body>
+
+</html>
