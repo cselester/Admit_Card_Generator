@@ -1,8 +1,8 @@
 /**
  * Admit Card Drive Sync + Export Report
  *
- * Run this AFTER generate_admit_cards.py has written PDFs + batch_manifest.xlsx
- * into a folder that Google Drive for Desktop is syncing to your Drive.
+ * Run this AFTER generate_admit_cards.py has written PDFs + a manifest_*.xlsx
+ * file into a folder that Google Drive for Desktop is syncing to your Drive.
  *
  * Setup (one-time):
  * 1. Install Google Drive for Desktop (free) and let it sync a folder,
@@ -10,15 +10,18 @@
  * 2. Open the spreadsheet you want this bound to (or any spreadsheet) ->
  *    Extensions -> Apps Script. Paste this file in alongside your existing
  *    portal backend (Code.gs from the earlier phase).
- * 3. Set DRIVE_FOLDER_ID and MANIFEST_FILE_NAME below.
+ * 3. Set DRIVE_FOLDER_ID below.
  * 4. Reload the spreadsheet -> you'll see an "Admit Cards" menu.
  *
  * What it does:
  * - buildIndexFromFolder(): shares the synced Drive folder once (so every file
  *   inside inherits "anyone with link can view" — no per-file sharing calls,
  *   which is what makes this fast at scale), scans it for PDFs, matches each
- *   to the batch_manifest.xlsx uploaded alongside them, and writes/updates
- *   the "Index" sheet in one batched write:
+ *   to its batch's manifest_*.xlsx (every manifest file in the folder is read
+ *   and merged — each generation run writes a uniquely-named manifest, e.g.
+ *   manifest_CBT_20260824_153300.xlsx, so multiple batches synced into the
+ *   same folder don't overwrite each other's student details), and writes/
+ *   updates the "Index" sheet in one batched write:
  *   Registration Number, Student Name, Batch Code, Registration Status,
  *   Center, CBT Center, CBT Center Address, CBT Exam Timings, Url Link,
  *   Mobile Last4, File Name, Source Sheet, Uploaded At.
@@ -29,8 +32,8 @@
  */
 
 // INDEX_SHEET_NAME is declared in Code.gs (both files share scope in Apps Script)
-const DRIVE_FOLDER_ID = "PASTE_YOUR_SYNCED_FOLDER_ID_HERE";
-const MANIFEST_FILE_NAME = "batch_manifest.xlsx";
+const DRIVE_FOLDER_ID = "18CJW5pTsq8V2hyH8t5Yja85JaqsI5P2m";
+const MANIFEST_NAME_CONTAINS = "manifest"; // matches manifest_CBT_20260824_153300.xlsx etc.
 const BACKUPS_FOLDER_NAME = "Admit Card Backups";
 
 function onOpen() {
@@ -56,7 +59,7 @@ function buildIndexFromFolder() {
   if (Object.keys(manifest).length === 0) {
     const proceed = ui.alert(
       "Manifest not found or empty",
-      `Couldn't read student details from "${MANIFEST_FILE_NAME}" in this folder. ` +
+      `Couldn't read student details from any manifest file in this folder. ` +
         "Registration Number and the Drive link will still be filled in, but Student Name, " +
         'Center, etc. will be blank.\n\nRun "Debug: list folder contents" from the menu to ' +
         "check the manifest file actually synced, then try again.\n\nContinue anyway?",
@@ -147,83 +150,96 @@ function buildIndexFromFolder() {
   ui.alert(`Index updated: ${newRows.length} new admit card(s) linked.`);
 }
 
-/** Reads batch_manifest.xlsx (or its auto-converted Google Sheet form) into
- *  {regNo: {studentName, batchCode, ...}}. Handles both cases because Drive
- *  sometimes auto-converts uploaded Office files to native Google formats on
- *  sync (a common Workspace default) — if that happens, the file is already
- *  a Sheet and doesn't need (and will fail) the xlsx->Sheet conversion step. */
+/** Finds every file in the folder whose name contains "manifest", reads each
+ *  one (raw .xlsx or auto-converted Google Sheet — Drive sometimes converts
+ *  uploaded Office files to native Google formats on sync, a common
+ *  Workspace default), and merges them into one {regNo: {studentName, ...}}
+ *  map. Reading ALL of them (not just the most recent) matters because each
+ *  generate_admit_cards.py run writes a uniquely-named manifest — if your
+ *  Drive folder holds PDFs from several different batches, this is what
+ *  makes every one of them resolve correctly instead of only the latest. */
 function readManifest(folder) {
-  const files = folder.getFilesByName(MANIFEST_FILE_NAME);
-  if (!files.hasNext()) {
+  const search = folder.searchFiles(
+    `title contains "${MANIFEST_NAME_CONTAINS}"`,
+  );
+  const manifestFiles = [];
+  while (search.hasNext()) manifestFiles.push(search.next());
+
+  if (manifestFiles.length === 0) {
     Logger.log(
-      `No file named "${MANIFEST_FILE_NAME}" found in folder "${folder.getName()}".`,
+      `No file with "${MANIFEST_NAME_CONTAINS}" in the name found in folder "${folder.getName()}".`,
     );
     return {};
-  }
-
-  // If multiple copies exist (re-synced runs, conflicted copies), use the newest
-  let file = files.next();
-  while (files.hasNext()) {
-    const next = files.next();
-    if (next.getLastUpdated() > file.getLastUpdated()) file = next;
   }
   Logger.log(
-    `Using manifest file: ${file.getName()} (${file.getMimeType()}), last updated ${file.getLastUpdated()}`,
+    `Found ${manifestFiles.length} manifest file(s): ${manifestFiles.map((f) => f.getName()).join(", ")}`,
   );
 
-  let dataRows;
-  if (file.getMimeType() === MimeType.GOOGLE_SHEETS) {
-    // Already a native Sheet — open directly, no conversion needed
-    const ss = SpreadsheetApp.openById(file.getId());
-    dataRows = ss.getSheets()[0].getDataRange().getValues();
-  } else {
-    // Raw .xlsx — convert via a temporary Google Sheet, then clean up
-    const blob = file.getBlob();
-    const resource = {
-      title: "temp_manifest_import",
-      mimeType: MimeType.GOOGLE_SHEETS,
-    };
-    const tempFile = Drive.Files.insert(resource, blob, { convert: true });
-    const tempSs = SpreadsheetApp.openById(tempFile.id);
-    dataRows = tempSs.getSheets()[0].getDataRange().getValues();
-    DriveApp.getFileById(tempFile.id).setTrashed(true);
-  }
-
-  if (dataRows.length < 2) {
-    Logger.log("Manifest file was read but contains no data rows.");
-    return {};
-  }
-
-  const headers = dataRows[0];
-  const col = {};
-  headers.forEach((h, i) => (col[String(h).trim()] = i));
-
-  const required = ["Registration Number", "Student Name", "Batch Code"];
-  const missing = required.filter((h) => !(h in col));
-  if (missing.length) {
-    Logger.log(
-      `Manifest is missing expected column(s): ${missing.join(", ")}. Found: ${headers.join(", ")}`,
-    );
-  }
-
   const manifest = {};
-  for (let i = 1; i < dataRows.length; i++) {
-    const row = dataRows[i];
-    const regNo = normalizeRegNo(row[col["Registration Number"]]);
-    if (!regNo) continue;
-    manifest[regNo] = {
-      studentName: row[col["Student Name"]],
-      batchCode: row[col["Batch Code"]],
-      registrationStatus: row[col["Registration Status"]],
-      center: row[col["Center"]],
-      cbtCenter: row[col["CBT Center"]],
-      cbtCenterAddress: row[col["CBT Center Address"]],
-      cbtExamTimings: row[col["CBT Exam Timings"]],
-      sourceSheet: row[col["Source Sheet"]],
-    };
+  let totalRows = 0;
+  for (const file of manifestFiles) {
+    const rows = readManifestFile(file);
+    totalRows += rows;
   }
-  Logger.log(`Manifest parsed: ${Object.keys(manifest).length} row(s).`);
+  Logger.log(
+    `Manifest parsed: ${Object.keys(manifest).length} unique registration number(s) from ${totalRows} total row(s) across ${manifestFiles.length} file(s).`,
+  );
   return manifest;
+
+  // Reads one manifest file's rows into the shared `manifest` object above.
+  // Defined inline so it can close over `manifest` without a global.
+  function readManifestFile(file) {
+    let dataRows;
+    if (file.getMimeType() === MimeType.GOOGLE_SHEETS) {
+      const ss = SpreadsheetApp.openById(file.getId());
+      dataRows = ss.getSheets()[0].getDataRange().getValues();
+    } else {
+      const blob = file.getBlob();
+      const resource = {
+        name: "temp_manifest_import",
+        mimeType: MimeType.GOOGLE_SHEETS,
+      };
+      const tempFile = Drive.Files.create(resource, blob, { convert: true });
+      const tempSs = SpreadsheetApp.openById(tempFile.id);
+      dataRows = tempSs.getSheets()[0].getDataRange().getValues();
+      DriveApp.getFileById(tempFile.id).setTrashed(true);
+    }
+
+    if (dataRows.length < 2) {
+      Logger.log(`${file.getName()}: read but contains no data rows.`);
+      return 0;
+    }
+
+    const headers = dataRows[0];
+    const col = {};
+    headers.forEach((h, i) => (col[String(h).trim()] = i));
+
+    const required = ["Registration Number", "Student Name", "Batch Code"];
+    const missing = required.filter((h) => !(h in col));
+    if (missing.length) {
+      Logger.log(
+        `${file.getName()}: missing expected column(s): ${missing.join(", ")}. Found: ${headers.join(", ")}`,
+      );
+      return 0;
+    }
+
+    for (let i = 1; i < dataRows.length; i++) {
+      const row = dataRows[i];
+      const regNo = normalizeRegNo(row[col["Registration Number"]]);
+      if (!regNo) continue;
+      manifest[regNo] = {
+        studentName: row[col["Student Name"]],
+        batchCode: row[col["Batch Code"]],
+        registrationStatus: row[col["Registration Status"]],
+        center: row[col["Center"]],
+        cbtCenter: row[col["CBT Center"]],
+        cbtCenterAddress: row[col["CBT Center Address"]],
+        cbtExamTimings: row[col["CBT Exam Timings"]],
+        sourceSheet: row[col["Source Sheet"]],
+      };
+    }
+    return dataRows.length - 1;
+  }
 }
 
 /** Normalizes a registration number to a plain digit string so PDF filenames
@@ -298,24 +314,53 @@ function backfillMissingDetails() {
   ui.alert(`Backfilled details for ${filled} row(s).`);
 }
 
-/** Debug helper: lists every file in the synced folder with its name and
- *  type, so you can confirm the manifest actually made it there and see
- *  exactly what name/type it has. Run from the Apps Script editor (select
- *  this function, then Run) or add it to the menu if you want it handy. */
+/** Debug helper: searches specifically for the manifest file (rather than
+ *  dumping the whole folder, which can be too large to read if the folder
+ *  has thousands of PDFs) and reports exactly what it finds. Safe to run
+ *  either from the "Admit Cards" menu or directly in the Apps Script editor
+ *  (Run button) — it detects which context it's in. */
 function debugListFolderContents() {
   const folder = DriveApp.getFolderById(DRIVE_FOLDER_ID);
-  const files = folder.getFiles();
-  const lines = [];
-  while (files.hasNext()) {
-    const f = files.next();
-    lines.push(
-      `${f.getName()}  |  ${f.getMimeType()}  |  updated ${f.getLastUpdated()}`,
+
+  // Count total files (cheap — just iterating an ID list, no content reads)
+  let totalCount = 0;
+  const allFiles = folder.getFiles();
+  while (allFiles.hasNext()) {
+    allFiles.next();
+    totalCount++;
+  }
+
+  // Search specifically for anything with "manifest" in the name
+  const matches = [];
+  const search = folder.searchFiles(
+    `title contains "${MANIFEST_NAME_CONTAINS}"`,
+  );
+  while (search.hasNext()) {
+    const f = search.next();
+    matches.push(
+      `${f.getName()}  |  ${f.getMimeType()}  |  updated ${f.getLastUpdated()}  |  id: ${f.getId()}`,
     );
   }
-  Logger.log(lines.join("\n"));
-  SpreadsheetApp.getUi().alert(
-    `${lines.length} file(s) in folder — see Extensions > Apps Script > Executions/Logs for details.`,
-  );
+
+  const summary = matches.length
+    ? `Found ${matches.length} file(s) matching "manifest":\n\n${matches.join("\n")}`
+    : `No file with "manifest" in the name found in this folder.\n\n` +
+      `Folder has ${totalCount} file(s) total. Either the manifest hasn't finished ` +
+      `syncing yet, or generate_admit_cards.py wrote it to a different folder than ` +
+      `the one DRIVE_FOLDER_ID points to.`;
+
+  Logger.log(summary);
+  Logger.log(`Total files in folder: ${totalCount}`);
+
+  // Only show a UI alert if we're actually running inside the spreadsheet
+  // (running this directly from the script editor has no UI context)
+  try {
+    SpreadsheetApp.getUi().alert(summary);
+  } catch (e) {
+    Logger.log(
+      "(No UI context — this is expected when run from the script editor directly. Check the log above instead.)",
+    );
+  }
 }
 
 function exportReport() {

@@ -33,13 +33,13 @@ PAGE_W, PAGE_H = 612, 792     # US Letter, matches template render
 # top/bottom are in "top-down" PDF coordinates (as reported by pdfplumber);
 # converted to reportlab's bottom-up coordinates at draw time.
 FIELD_MAP = {
-    "Registration Number": {"cell_top": 166.5, "cell_bottom": 192.5, "text_bottom": 184.64},
-    "Student Name":         {"cell_top": 192.5, "cell_bottom": 217.5, "text_bottom": 210.14},
-    "Registration Status":  {"cell_top": 217.5, "cell_bottom": 243.5, "text_bottom": 235.64},
-    "Center":                {"cell_top": 243.5, "cell_bottom": 268.5, "text_bottom": 261.14},
-    "CBT Center":            {"cell_top": 268.5, "cell_bottom": 294.5, "text_bottom": 286.64},
-    "CBT Center Address":    {"cell_top": 294.5, "cell_bottom": 331.5, "text_bottom": 312.14},
-    "CBT Exam Timings":      {"cell_top": 331.5, "cell_bottom": 357.5, "text_bottom": 349.64},
+    "Registration Number": {"cell_top": 161.8, "cell_bottom": 186.5, "text_bottom": 179.32},
+    "Student Name":         {"cell_top": 186.5, "cell_bottom": 211.3, "text_bottom": 204.07},
+    "Registration Status":  {"cell_top": 211.3, "cell_bottom": 236.0, "text_bottom": 228.82},
+    "Center":                {"cell_top": 236.0, "cell_bottom": 260.8, "text_bottom": 253.57},
+    "CBT Center":            {"cell_top": 260.8, "cell_bottom": 285.5, "text_bottom": 278.32},
+    "CBT Center Address":    {"cell_top": 285.5, "cell_bottom": 322.3, "text_bottom": 302.42},
+    "CBT Exam Timings":      {"cell_top": 322.3, "cell_bottom": 347.0, "text_bottom": 339.82},
 }
 
 # Table grid geometry, read once off the template — redrawn fresh on every
@@ -47,8 +47,8 @@ FIELD_MAP = {
 # (some viewers render the merged/underlying strokes inconsistently).
 GRID_LEFT_X = 36.5
 GRID_MID_X = 153.5      # divider between label column and value column
-GRID_RIGHT_X = 574.5
-GRID_ROW_YS = [166.5, 192.5, 217.5, 243.5, 268.5, 294.5, 331.5, 357.5]
+GRID_RIGHT_X = 575.0
+GRID_ROW_YS = [161.8, 186.5, 211.3, 236.0, 260.8, 285.5, 322.3, 347.0]
 
 
 def draw_grid(c):
@@ -152,15 +152,35 @@ def load_records(xlsx_path: Path, sheet_name: str, limit: int | None):
     return records
 
 
+DEFAULT_MOBILE_LAST4 = "1234"  # fallback verification code when no mobile number is on file
+
+
+def _mobile_last4(rec: dict) -> str:
+    """Last 4 digits of the student's mobile number if present in the source
+    sheet; otherwise the shared default so students without phone data on
+    file can still be verified on the portal."""
+    for key in ("Mobile Number", "Mobile", "Phone Number", "Phone"):
+        raw = rec.get(key)
+        if raw:
+            digits = "".join(ch for ch in str(raw) if ch.isdigit())
+            if len(digits) >= 4:
+                return digits[-4:]
+    return DEFAULT_MOBILE_LAST4
+
+
 def write_manifest(records: list, out_dir: Path, sheet_name: str):
     """Write a manifest (reg no -> student details -> filename) alongside the PDFs.
     This is what the Drive-side Apps Script reads to enrich the Index sheet,
-    and it's a plain local backup of the batch even before anything reaches Drive."""
+    and it's a plain local backup of the batch even before anything reaches Drive.
+
+    The filename includes the sheet name and a timestamp so that generating
+    multiple batches into the same folder never overwrites an earlier batch's
+    manifest — DriveSync.gs reads and merges every manifest_*.xlsx it finds."""
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Manifest"
     headers = ["Registration Number", "Student Name", "Batch Code", "Registration Status", "Center",
-               "CBT Center", "CBT Center Address", "CBT Exam Timings", "File Name", "Source Sheet"]
+               "CBT Center", "CBT Center Address", "CBT Exam Timings", "Mobile Last4", "File Name", "Source Sheet"]
     ws.append(headers)
     for rec in records:
         reg_no = rec.get("Registration Number", "")
@@ -175,10 +195,13 @@ def write_manifest(records: list, out_dir: Path, sheet_name: str):
             rec.get("CBT Center", ""),
             rec.get("CBT Center Address", ""),
             rec.get("CBT Exam Timings", ""),
+            _mobile_last4(rec),
             f"{reg_no}.pdf",
             sheet_name,
         ])
-    manifest_path = out_dir / "batch_manifest.xlsx"
+    safe_sheet = "".join(c if c.isalnum() else "_" for c in sheet_name)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    manifest_path = out_dir / f"manifest_{safe_sheet}_{timestamp}.xlsx"
     wb.save(manifest_path)
     return manifest_path
 
