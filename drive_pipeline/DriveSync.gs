@@ -236,6 +236,10 @@ function readManifest(folder) {
         cbtCenterAddress: row[col["CBT Center Address"]],
         cbtExamTimings: row[col["CBT Exam Timings"]],
         sourceSheet: row[col["Source Sheet"]],
+        mobileLast4:
+          "Mobile Last4" in col
+            ? String(row[col["Mobile Last4"]] || "1234")
+            : "1234",
       };
     }
     return dataRows.length - 1;

@@ -27,19 +27,19 @@ FONT = "Helvetica"
 FONT_SIZE = 11
 TEXT_X = 166          # left edge of the value column text (matches template)
 CELL_X0, CELL_X1 = 160, 560   # whiteout rectangle spans the value cell (kept clear of the 575.5pt border)
+ROW_X0, ROW_X1 = 37, 574      # full-row whiteout, used for fields hidden from the printed card
 PAGE_W, PAGE_H = 612, 792     # US Letter, matches template render
 
 # Field map: derived once from the template's placeholder positions.
 # top/bottom are in "top-down" PDF coordinates (as reported by pdfplumber);
 # converted to reportlab's bottom-up coordinates at draw time.
 FIELD_MAP = {
-    "Registration Number": {"cell_top": 161.8, "cell_bottom": 186.5, "text_bottom": 179.32},
-    "Student Name":         {"cell_top": 186.5, "cell_bottom": 211.3, "text_bottom": 204.07},
-    "Registration Status":  {"cell_top": 211.3, "cell_bottom": 236.0, "text_bottom": 228.82},
-    "Center":                {"cell_top": 236.0, "cell_bottom": 260.8, "text_bottom": 253.57},
-    "CBT Center":            {"cell_top": 260.8, "cell_bottom": 285.5, "text_bottom": 278.32},
-    "CBT Center Address":    {"cell_top": 285.5, "cell_bottom": 322.3, "text_bottom": 302.42},
-    "CBT Exam Timings":      {"cell_top": 322.3, "cell_bottom": 347.0, "text_bottom": 339.82},
+    "Registration Number": {"cell_top": 166.5, "cell_bottom": 192.5, "text_bottom": 184.64},
+    "Student Name":         {"cell_top": 192.5, "cell_bottom": 217.5, "text_bottom": 210.14},
+    "Registration Status":  {"cell_top": 217.5, "cell_bottom": 243.5, "text_bottom": 235.64},
+    "CBT Center":            {"cell_top": 243.5, "cell_bottom": 268.5, "text_bottom": 261.14},
+    "CBT Center Address":    {"cell_top": 268.5, "cell_bottom": 306.5, "text_bottom": 286.64},
+    "CBT Exam Timings":      {"cell_top": 306.5, "cell_bottom": 331.5, "text_bottom": 324.14},
 }
 
 # Table grid geometry, read once off the template — redrawn fresh on every
@@ -47,8 +47,17 @@ FIELD_MAP = {
 # (some viewers render the merged/underlying strokes inconsistently).
 GRID_LEFT_X = 36.5
 GRID_MID_X = 153.5      # divider between label column and value column
-GRID_RIGHT_X = 575.0
-GRID_ROW_YS = [161.8, 186.5, 211.3, 236.0, 260.8, 285.5, 322.3, 347.0]
+GRID_RIGHT_X = 574.5
+GRID_ROW_YS = [166.5, 192.5, 217.5, 243.5, 268.5, 306.5, 331.5]
+
+# Fields listed in FIELD_MAP but not printed on the card — still collected
+# and written to the manifest/tracking sheet as normal, just suppressed on
+# the PDF itself. The label for a hidden field is baked into the template
+# background (not something we draw), so if this is used again, the *entire*
+# row gets whited out, not just the value column, to blank the label too.
+# No fields are currently hidden on this template — "Center" was removed
+# from the template itself rather than suppressed at render time.
+HIDDEN_ON_CARD = set()
 
 
 def draw_grid(c):
@@ -86,14 +95,23 @@ def build_overlay(record: dict) -> "io.BytesIO":
     c.setFont(FONT, FONT_SIZE)
 
     for field, pos in FIELD_MAP.items():
+        cell_top_y = PAGE_H - pos["cell_top"]
+        cell_bottom_y = PAGE_H - pos["cell_bottom"]
+        cell_height = cell_top_y - cell_bottom_y
+
+        if field in HIDDEN_ON_CARD:
+            # Blank the whole row — the label is baked into the template
+            # background, so covering just the value column would leave
+            # the static label ("Center", etc.) still visible.
+            c.setFillColorRGB(1, 1, 1)
+            c.rect(ROW_X0, cell_bottom_y, ROW_X1 - ROW_X0, cell_height, fill=1, stroke=0)
+            continue
+
         raw = record.get(field, "")
         if isinstance(raw, float) and raw.is_integer():
             value = str(int(raw))
         else:
             value = str(raw or "")
-        cell_top_y = PAGE_H - pos["cell_top"]
-        cell_bottom_y = PAGE_H - pos["cell_bottom"]
-        cell_height = cell_top_y - cell_bottom_y
         max_width = CELL_X1 - TEXT_X - 4
 
         # Whiteout the placeholder text first
